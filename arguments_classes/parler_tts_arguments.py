@@ -41,7 +41,8 @@ class ParlerTTSHandlerArguments:
     )
     description: str = field(
         default=(
-            "Jenny speaks at a slightly slow pace with an animated delivery with clear audio quality."
+            "A female speaker with a slightly low-pitched voice delivers her words quite expressively, in a very confined sounding environment with clear audio quality. "
+            "She speaks very fast."
         ),
         metadata={
             "help": "Description of the speaker's voice and speaking style to guide the TTS model."
@@ -57,11 +58,5 @@ class ParlerTTSHandlerArguments:
         default=8,
         metadata={
             "help": "When using compilation, the prompt as to be padded to closest power of 2. This parameters sets the maximun power of 2 possible."
-        },
-    )
-    use_default_speakers_list: bool = field(
-        default=False,
-        metadata={
-            "help": "Whether to use the default list of speakers or not."
         },
     )

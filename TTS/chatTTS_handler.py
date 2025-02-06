@@ -5,6 +5,7 @@ import librosa
 import numpy as np
 from rich.console import Console
 import torch
+from TTS.speaker_timbre import Timbre
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -29,9 +30,15 @@ class ChatTTSHandler(BaseHandler):
         self.model.load(compile=False)  # Doesn't work for me with True
         self.chunk_size = chunk_size
         self.stream = stream
-        rnd_spk_emb = self.model.sample_random_speaker()
+        # Sampled Female Speaker
+        rnd_spk_emb = Timbre.FEMALE_TIMBRE.value
+
+        print(rnd_spk_emb)
         self.params_infer_code = ChatTTS.Chat.InferCodeParams(
             spk_emb=rnd_spk_emb,
+        )
+        self.params_refine_text = ChatTTS.Chat.RefineTextParams(
+            prompt='[oral_2][laugh_1][break_6]',  
         )
         self.warmup()
 
@@ -52,7 +59,7 @@ class ChatTTSHandler(BaseHandler):
             )  # Removing this line makes it fail more often. I'm looking into it.
 
         wavs_gen = self.model.infer(
-            llm_sentence, params_infer_code=self.params_infer_code, stream=self.stream
+            llm_sentence, params_infer_code=self.params_infer_code, stream=self.stream, params_refine_text=self.params_refine_text, 
         )
 
         if self.stream:
@@ -62,7 +69,7 @@ class ChatTTSHandler(BaseHandler):
                     self.should_listen.set()
                     return
                 audio_chunk = librosa.resample(gen[0], orig_sr=24000, target_sr=16000)
-                audio_chunk = (audio_chunk * 32768).astype(np.int16)[0]
+                audio_chunk = (audio_chunk * 32768).astype(np.int16)
                 while len(audio_chunk) > self.chunk_size:
                     yield audio_chunk[: self.chunk_size]  # Return the first chunk_size samples of the audio data
                     audio_chunk = audio_chunk[self.chunk_size :]  # Remove the samples that have already been returned

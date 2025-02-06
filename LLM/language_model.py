@@ -5,7 +5,13 @@ from transformers import (
     pipeline,
     TextIteratorStreamer,
 )
+import asyncio
 import torch
+import ollama
+from nemoguardrails import LLMRails, RailsConfig
+from nemoguardrails.streaming import StreamingHandler
+from nemoguardrails.llm.providers import register_llm_provider
+from guard_rails_config.ollamallm import OllamaLLM
 
 from LLM.chat import Chat
 from baseHandler import BaseHandler
@@ -26,11 +32,6 @@ WHISPER_LANGUAGE_TO_LLM_LANGUAGE = {
     "ja": "japanese",
     "ko": "korean",
     "hi": "hindi",
-    "de": "german",
-    "pt": "portuguese",
-    "pl": "polish",
-    "it": "italian",
-    "nl": "dutch",
 }
 
 class LanguageModelHandler(BaseHandler):
@@ -48,6 +49,7 @@ class LanguageModelHandler(BaseHandler):
         chat_size=1,
         init_chat_role=None,
         init_chat_prompt="You are a helpful AI assistant.",
+        guard_config_path = "guard_rails_config/config.yml"
     ):
         self.device = device
         self.torch_dtype = getattr(torch, torch_dtype)
@@ -78,75 +80,146 @@ class LanguageModelHandler(BaseHandler):
                 )
             self.chat.init_chat({"role": init_chat_role, "content": init_chat_prompt})
         self.user_role = user_role
-
+        self.rails = self.load_guardrails(guard_config_path)
+        self.streaming_handler = StreamingHandler()
         self.warmup()
+
+    def load_guardrails(self, config_path):
+        register_llm_provider("ollamallm", OllamaLLM)
+        config = RailsConfig.from_path(config_path)
+        rails = LLMRails(config)
+        logger.info("Guardrails loaded successfully.")
+        logging.getLogger("nemoguardrails.streaming").propagate = False
+        return rails
 
     def warmup(self):
         logger.info(f"Warming up {self.__class__.__name__}")
 
         dummy_input_text = "Repeat the word 'home'."
         dummy_chat = [{"role": self.user_role, "content": dummy_input_text}]
-        warmup_gen_kwargs = {
-            "min_new_tokens": self.gen_kwargs["min_new_tokens"],
-            "max_new_tokens": self.gen_kwargs["max_new_tokens"],
-            **self.gen_kwargs,
-        }
-
+        
         n_steps = 2
-
-        if self.device == "cuda":
-            start_event = torch.cuda.Event(enable_timing=True)
-            end_event = torch.cuda.Event(enable_timing=True)
-            torch.cuda.synchronize()
-            start_event.record()
+        generated_text = ""
 
         for _ in range(n_steps):
-            thread = Thread(
-                target=self.pipe, args=(dummy_chat,), kwargs=warmup_gen_kwargs
+            # Simulating a warm-up for ollama's chat API
+            stream = ollama.chat(
+                model='llama3.1:8b',
+                messages=dummy_chat,
+                stream=True,
             )
-            thread.start()
-            for _ in self.streamer:
-                pass
+            for new_text in stream:
+                new_text = new_text['message']['content']
+                generated_text += new_text
+                
+        logger.info(f"{self.__class__.__name__} warmed up with dummy text: {generated_text}")
 
-        if self.device == "cuda":
-            end_event.record()
-            torch.cuda.synchronize()
+    # def process(self, prompt):
+    #     logger.debug("infering language model...")
+    #     language_code = None
+    #     if isinstance(prompt, tuple):
+    #         prompt, language_code = prompt
+    #         if language_code[-5:] == "-auto":
+    #             language_code = language_code[:-5]
+    #             prompt = f"Please reply to my message in {WHISPER_LANGUAGE_TO_LLM_LANGUAGE[language_code]}. " + prompt
 
-            logger.info(
-                f"{self.__class__.__name__}:  warmed up! time: {start_event.elapsed_time(end_event) * 1e-3:.3f} s"
-            )
+    #     self.chat.append({"role": self.user_role, "content": prompt})
 
+    #     stream = ollama.chat(
+    #         model='llama3.1:8b',
+    #         messages=self.chat.to_list(),
+    #         stream=True,
+    #     )
+
+    #     generated_text, printable_text = "", ""
+
+    #     for new_text in stream:
+    #         new_text = new_text['message']['content']
+    #         generated_text += new_text
+    #         printable_text += new_text
+    #         sentences = sent_tokenize(printable_text)
+    #         if len(sentences) > 1:
+    #             yield (sentences[0], language_code)
+    #             printable_text = new_text
+
+    #     self.chat.append({"role": "assistant", "content": generated_text})
+
+    #     yield (printable_text, language_code)
+
+    # def process(self, prompt):
+    #     logger.debug("Inferring with language model...")
+    #     language_code = None
+
+    #     if isinstance(prompt, tuple):
+    #         prompt, language_code = prompt
+    #         if language_code and language_code.endswith("-auto"):
+    #             language_code = language_code[:-5]
+    #             prompt = f"Please reply to my message in {WHISPER_LANGUAGE_TO_LLM_LANGUAGE[language_code]}. {prompt}"
+
+    #     self.chat.append({"role": self.user_role, "content": prompt})
+
+    #     async def generate_response():
+    #         async for chunk in self.streaming_handler:
+    #             yield (chunk, language_code)
+
+    #     result = asyncio.run(
+    #         self.rails.generate_async(
+    #             messages=self.chat.to_list(),
+    #             streaming_handler=self.streaming_handler,
+    #         )
+    #     )
+
+    #     self.chat.append({"role": "assistant", "content": result['content']})
+    #     yield from generate_response()
+
+    # Latest Process
     def process(self, prompt):
-        logger.debug("infering language model...")
+        logger.debug("Inferring with language model...")
         language_code = None
+
         if isinstance(prompt, tuple):
             prompt, language_code = prompt
-            if language_code[-5:] == "-auto":
+            if language_code and language_code.endswith("-auto"):
                 language_code = language_code[:-5]
-                prompt = f"Please reply to my message in {WHISPER_LANGUAGE_TO_LLM_LANGUAGE[language_code]}. " + prompt
+                prompt = f"Please reply to my message in {WHISPER_LANGUAGE_TO_LLM_LANGUAGE[language_code]}. {prompt}"
 
         self.chat.append({"role": self.user_role, "content": prompt})
-        thread = Thread(
-            target=self.pipe, args=(self.chat.to_list(),), kwargs=self.gen_kwargs
-        )
-        thread.start()
-        if self.device == "mps":
-            generated_text = ""
-            for new_text in self.streamer:
-                generated_text += new_text
-            printable_text = generated_text
-            torch.mps.empty_cache()
-        else:
-            generated_text, printable_text = "", ""
-            for new_text in self.streamer:
-                generated_text += new_text
-                printable_text += new_text
-                sentences = sent_tokenize(printable_text)
-                if len(sentences) > 1:
-                    yield (sentences[0], language_code)
-                    printable_text = new_text
 
-        self.chat.append({"role": "assistant", "content": generated_text})
+        
 
-        # don't forget last sentence
-        yield (printable_text, language_code)
+    #     for new_text in stream:
+    #         new_text = new_text['message']['content']
+    #         generated_text += new_text
+    #         printable_text += new_text
+    #         sentences = sent_tokenize(printable_text)
+    #         if len(sentences) > 1:
+    #             yield (sentences[0], language_code)
+    #             printable_text = new_text
+
+        try:
+            # async def generate_response():
+            #     generated_text, printable_text = "", ""
+            #     async for chunk in self.streaming_handler:
+            #         generated_text += chunk
+            #         printable_text += chunk
+            #         sentences = sent_tokenize(printable_text)
+            #         if len(sentences) > 1:
+            #             yield (sentences[0], language_code)
+            #             printable_text = chunk
+            #         yield (chunk, language_code)
+
+            result = asyncio.run(
+                self.rails.generate_async(
+                    messages=self.chat.to_list(),
+                    streaming_handler=self.streaming_handler,
+                )
+            )
+
+            self.chat.append({"role": "assistant", "content": result['content']})
+            # generate_response()
+            yield result['content']
+
+        except Exception as e:
+            logger.error(f"Error during generation: {e}")
+            yield ("An error occurred while generating the response.", language_code)
+            
