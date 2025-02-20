@@ -33,7 +33,7 @@ class ModuleArguments:
         },
     )
     tts: Optional[str] = field(
-        default="parler",
+        default="chatTTS",
         metadata={
             "help": "The TTS to use. Either 'parler', 'melo', 'chatTTS' or 'facebookMMS'. Default is 'parler'"
         },

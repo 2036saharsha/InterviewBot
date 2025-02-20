@@ -2,3 +2,4 @@ __pycache__
 tmp
 cache
 asset
+test_streaming
